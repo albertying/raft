@@ -169,10 +169,28 @@ RequestVoteReply RaftNode::handleRequestVote(const RequestVoteArgs& args) {
     std::lock_guard<std::mutex> lk(mu_);
     reply.term = currentTerm_;
     reply.voteGranted = false;
+
+    if (args.term < currentTerm_) {
+        return reply;
+    }
     if (args.term > currentTerm_) {
         currentTerm_ = args.term;
         state_ = NodeState::FOLLOWER;
         votedFor_ = -1;
+    }
+    reply.term = currentTerm_;
+
+    // Grant vote if we haven't voted, or voted for this candidate,
+    // and candidate's log is at least as up-to-date as ours
+    bool logOk = (args.lastLogTerm > log_->lastTerm()) ||
+                 (args.lastLogTerm == log_->lastTerm() && args.lastLogIndex >= log_->lastIndex());
+
+    if ((votedFor_ == -1 || votedFor_ == args.candidateId) && logOk) {
+        votedFor_ = args.candidateId;
+        reply.voteGranted = true;
+        lastHeartbeat_ = std::chrono::steady_clock::now(); // reset timer on vote grant
+        std::cerr << "[NODE " << id_ << "][" << stateName(state_) << "] voted for " << args.candidateId
+                  << " term=" << args.term << "\n";
     }
     return reply;
 }
