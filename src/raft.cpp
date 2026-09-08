@@ -87,11 +87,69 @@ void RaftNode::loadPersist() {
 }
 
 void RaftNode::ticker() {
-    // stub - election timer added next
+    while (!dead_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (dead_) break;
+
+        std::unique_lock<std::mutex> lk(mu_);
+        NodeState s = state_;
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastHeartbeat_).count();
+        lk.unlock();
+
+        if (s == NodeState::LEADER) {
+            sendHeartbeats();
+        } else if (elapsed >= electionTimeoutMs_) {
+            startElection();
+        }
+    }
 }
 
 void RaftNode::startElection() {
-    // stub
+    std::unique_lock<std::mutex> lk(mu_);
+    currentTerm_++;
+    state_ = NodeState::CANDIDATE;
+    votedFor_ = id_;
+    // BUG: resetting lastHeartbeat here means if election fails,
+    // the timer won't fire again until another full timeout passes from now
+    lastHeartbeat_ = std::chrono::steady_clock::now();
+    electionTimeoutMs_ = randomTimeout();
+    int term = currentTerm_;
+    int lastIdx = log_->lastIndex();
+    int lastTerm = log_->lastTerm();
+    lk.unlock();
+
+    std::cerr << "[NODE " << id_ << "][CANDIDATE] starting election term=" << term << "\n";
+
+    int votes = 1; // vote for self
+    for (auto* peer : peers_) {
+        if (dead_) return;
+        RequestVoteArgs args{term, id_, lastIdx, lastTerm};
+        auto reply = peer->handleRequestVote(args);
+        std::lock_guard<std::mutex> lg(mu_);
+        if (reply.term > currentTerm_) {
+            currentTerm_ = reply.term;
+            state_ = NodeState::FOLLOWER;
+            votedFor_ = -1;
+            return;
+        }
+        if (reply.voteGranted) votes++;
+        if (state_ != NodeState::CANDIDATE || currentTerm_ != term) return;
+    }
+
+    std::lock_guard<std::mutex> lg(mu_);
+    if (state_ == NodeState::CANDIDATE && currentTerm_ == term) {
+        if (votes > (int)peers_.size() / 2) {
+            state_ = NodeState::LEADER;
+            leaderId_ = id_;
+            std::cerr << "[NODE " << id_ << "][LEADER] elected term=" << term << "\n";
+            // init leader state
+            for (size_t i = 0; i < peers_.size(); i++) {
+                nextIndex_[i] = log_->lastIndex() + 1;
+                matchIndex_[i] = 0;
+            }
+        }
+    }
 }
 
 void RaftNode::sendHeartbeats() {
