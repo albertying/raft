@@ -110,9 +110,7 @@ void RaftNode::startElection() {
     currentTerm_++;
     state_ = NodeState::CANDIDATE;
     votedFor_ = id_;
-    // BUG: resetting lastHeartbeat here means if election fails,
-    // the timer won't fire again until another full timeout passes from now
-    lastHeartbeat_ = std::chrono::steady_clock::now();
+    lastHeartbeat_ = std::chrono::steady_clock::now(); // reset timer
     electionTimeoutMs_ = randomTimeout();
     int term = currentTerm_;
     int lastIdx = log_->lastIndex();
@@ -139,11 +137,12 @@ void RaftNode::startElection() {
 
     std::lock_guard<std::mutex> lg(mu_);
     if (state_ == NodeState::CANDIDATE && currentTerm_ == term) {
+        // majority of peers (doesn't include self)
         if (votes > (int)peers_.size() / 2) {
             state_ = NodeState::LEADER;
             leaderId_ = id_;
             std::cerr << "[NODE " << id_ << "][LEADER] elected term=" << term << "\n";
-            // init leader state
+            // init leader volatile state
             for (size_t i = 0; i < peers_.size(); i++) {
                 nextIndex_[i] = log_->lastIndex() + 1;
                 matchIndex_[i] = 0;
