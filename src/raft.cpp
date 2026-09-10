@@ -111,7 +111,7 @@ void RaftNode::startElection() {
     currentTerm_++;
     state_ = NodeState::CANDIDATE;
     votedFor_ = id_;
-    lastHeartbeat_ = std::chrono::steady_clock::now(); // reset timer
+    // don't reset lastHeartbeat here — that caused timer to not fire after failed election
     electionTimeoutMs_ = randomTimeout();
     int term = currentTerm_;
     int lastIdx = log_->lastIndex();
