@@ -4,6 +4,7 @@
 #include <iostream>
 #include <random>
 #include <sstream>
+#include <algorithm>
 
 // [NODE id][STATE] logging
 static const char* stateName(NodeState s) {
@@ -152,7 +153,39 @@ void RaftNode::startElection() {
 }
 
 void RaftNode::sendHeartbeats() {
-    // stub
+    int term, leaderId;
+    std::vector<RaftNode*> peers;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (state_ != NodeState::LEADER) return;
+        term = currentTerm_;
+        leaderId = id_;
+        peers = peers_;
+    }
+
+    for (size_t i = 0; i < peers.size(); i++) {
+        if (dead_) return;
+        int prevLogIndex, prevLogTerm, ni;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (state_ != NodeState::LEADER) return;
+            ni = nextIndex_[i];
+            prevLogIndex = ni - 1;
+            prevLogTerm = (prevLogIndex >= 0 && prevLogIndex <= log_->lastIndex())
+                ? log_->getEntry(prevLogIndex).term : 0;
+        }
+        int leaderCommit;
+        { std::lock_guard<std::mutex> lk2(mu_); leaderCommit = commitIndex_; }
+        AppendEntriesArgs args{term, leaderId, prevLogIndex, prevLogTerm, {}, leaderCommit};
+        auto reply = peers[i]->handleAppendEntries(args);
+        std::lock_guard<std::mutex> lk(mu_);
+        if (reply.term > currentTerm_) {
+            currentTerm_ = reply.term;
+            state_ = NodeState::FOLLOWER;
+            votedFor_ = -1;
+            return;
+        }
+    }
 }
 
 void RaftNode::applyEntries() {
@@ -201,10 +234,49 @@ AppendEntriesReply RaftNode::handleAppendEntries(const AppendEntriesArgs& args) 
     reply.success = false;
     reply.conflictIndex = -1;
     reply.conflictTerm = -1;
+
+    if (args.term < currentTerm_) {
+        return reply;
+    }
+
     if (args.term > currentTerm_) {
         currentTerm_ = args.term;
-        state_ = NodeState::FOLLOWER;
         votedFor_ = -1;
     }
+    state_ = NodeState::FOLLOWER;
+    leaderId_ = args.leaderId;
+    lastHeartbeat_ = std::chrono::steady_clock::now();
+    reply.term = currentTerm_;
+
+    // check log consistency
+    if (args.prevLogIndex > log_->lastIndex()) {
+        reply.conflictIndex = log_->lastIndex() + 1;
+        reply.conflictTerm = -1;
+        return reply;
+    }
+
+    // append entries
+    int idx = args.prevLogIndex;
+    for (const auto& entry : args.entries) {
+        idx++;
+        if (idx <= log_->lastIndex()) {
+            if (log_->getEntry(idx).term != entry.term) {
+                log_->truncateAfter(idx - 1);
+                log_->append(entry);
+            }
+            // else already have it
+        } else {
+            log_->append(entry);
+        }
+    }
+
+    // update commit index
+    if (args.leaderCommit > commitIndex_) {
+        commitIndex_ = std::min(args.leaderCommit, log_->lastIndex());
+    }
+
+    reply.success = true;
+    std::cerr << "[NODE " << id_ << "][FOLLOWER] accepted AE from " << args.leaderId
+              << " term=" << args.term << "\n";
     return reply;
 }
