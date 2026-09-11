@@ -165,24 +165,28 @@ void RaftNode::sendHeartbeats() {
 
     for (size_t i = 0; i < peers.size(); i++) {
         if (dead_) return;
-        int prevLogIndex, prevLogTerm, ni;
+
+        int prevLogIndex, prevLogTerm, leaderCommit;
         {
             std::lock_guard<std::mutex> lk(mu_);
             if (state_ != NodeState::LEADER) return;
-            ni = nextIndex_[i];
+            int ni = nextIndex_[i];
             prevLogIndex = ni - 1;
-            prevLogTerm = (prevLogIndex >= 0 && prevLogIndex <= log_->lastIndex())
+            prevLogTerm = (prevLogIndex > 0 && prevLogIndex <= log_->lastIndex())
                 ? log_->getEntry(prevLogIndex).term : 0;
+            leaderCommit = commitIndex_;
         }
-        int leaderCommit;
-        { std::lock_guard<std::mutex> lk2(mu_); leaderCommit = commitIndex_; }
+
+        // empty entries = heartbeat
         AppendEntriesArgs args{term, leaderId, prevLogIndex, prevLogTerm, {}, leaderCommit};
         auto reply = peers[i]->handleAppendEntries(args);
+
         std::lock_guard<std::mutex> lk(mu_);
         if (reply.term > currentTerm_) {
             currentTerm_ = reply.term;
             state_ = NodeState::FOLLOWER;
             votedFor_ = -1;
+            leaderId_ = -1;
             return;
         }
     }
