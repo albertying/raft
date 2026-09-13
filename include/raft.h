@@ -92,6 +92,9 @@ private:
     std::unique_ptr<RaftLog> log_;
     std::unique_ptr<KVStore> kvStore_;
 
+    // heartbeat interval (leader sends AE every 50ms)
+    static constexpr int kHeartbeatMs = 50;
+
     // Election/heartbeat
     void ticker();
     void startElection();

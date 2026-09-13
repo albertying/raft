@@ -88,20 +88,31 @@ void RaftNode::loadPersist() {
 }
 
 void RaftNode::ticker() {
+    auto lastHB = std::chrono::steady_clock::now();
+
     while (!dead_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
         if (dead_) break;
 
-        std::unique_lock<std::mutex> lk(mu_);
-        NodeState s = state_;
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - lastHeartbeat_).count();
-        lk.unlock();
+        NodeState s;
+        long long elapsed;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            s = state_;
+            elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - lastHeartbeat_).count();
+        }
 
         if (s == NodeState::LEADER) {
-            sendHeartbeats();
+            auto now = std::chrono::steady_clock::now();
+            auto hbElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastHB).count();
+            if (hbElapsed >= kHeartbeatMs) {
+                sendHeartbeats();
+                lastHB = now;
+            }
         } else if (elapsed >= electionTimeoutMs_) {
             startElection();
+            lastHB = std::chrono::steady_clock::now();
         }
     }
 }
