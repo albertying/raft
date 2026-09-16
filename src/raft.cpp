@@ -209,9 +209,32 @@ void RaftNode::sendHeartbeats() {
             int newMatch = prevLogIndex + (int)entries.size();
             if (newMatch > matchIndex_[i]) matchIndex_[i] = newMatch;
             nextIndex_[i] = matchIndex_[i] + 1;
+
+            // check if we can advance commitIndex
+            // find highest N such that a majority have matchIndex >= N and log[N].term == currentTerm
+            int n = log_->lastIndex();
+            while (n > commitIndex_) {
+                if (log_->getEntry(n).term == currentTerm_) {
+                    int count = 1; // self
+                    for (size_t j = 0; j < peers_.size(); j++) {
+                        if (matchIndex_[j] >= n) count++;
+                    }
+                    // majority of cluster
+                    if (count > (int)(peers_.size() + 1) / 2) {
+                        commitIndex_ = n;
+                        std::cerr << "[NODE " << id_ << "][LEADER] commit index advanced to " << n << "\n";
+                        break;
+                    }
+                }
+                n--;
+            }
         } else {
             // back off
-            if (nextIndex_[i] > 1) nextIndex_[i]--;
+            if (reply.conflictIndex > 0) {
+                nextIndex_[i] = reply.conflictIndex;
+            } else if (nextIndex_[i] > 1) {
+                nextIndex_[i]--;
+            }
         }
     }
 }
