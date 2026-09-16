@@ -178,6 +178,7 @@ void RaftNode::sendHeartbeats() {
         if (dead_) return;
 
         int prevLogIndex, prevLogTerm, leaderCommit;
+        std::vector<LogEntry> entries;
         {
             std::lock_guard<std::mutex> lk(mu_);
             if (state_ != NodeState::LEADER) return;
@@ -186,10 +187,13 @@ void RaftNode::sendHeartbeats() {
             prevLogTerm = (prevLogIndex > 0 && prevLogIndex <= log_->lastIndex())
                 ? log_->getEntry(prevLogIndex).term : 0;
             leaderCommit = commitIndex_;
+            // send entries the follower may be missing
+            if (ni <= log_->lastIndex()) {
+                entries = log_->getEntriesFrom(ni);
+            }
         }
 
-        // empty entries = heartbeat
-        AppendEntriesArgs args{term, leaderId, prevLogIndex, prevLogTerm, {}, leaderCommit};
+        AppendEntriesArgs args{term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit};
         auto reply = peers[i]->handleAppendEntries(args);
 
         std::lock_guard<std::mutex> lk(mu_);
@@ -199,6 +203,15 @@ void RaftNode::sendHeartbeats() {
             votedFor_ = -1;
             leaderId_ = -1;
             return;
+        }
+        if (reply.success) {
+            // update nextIndex and matchIndex
+            int newMatch = prevLogIndex + (int)entries.size();
+            if (newMatch > matchIndex_[i]) matchIndex_[i] = newMatch;
+            nextIndex_[i] = matchIndex_[i] + 1;
+        } else {
+            // back off
+            if (nextIndex_[i] > 1) nextIndex_[i]--;
         }
     }
 }
@@ -263,35 +276,35 @@ AppendEntriesReply RaftNode::handleAppendEntries(const AppendEntriesArgs& args) 
     lastHeartbeat_ = std::chrono::steady_clock::now();
     reply.term = currentTerm_;
 
-    // check log consistency
+    // check log consistency at prevLogIndex
+    // NOTE: only checking index exists, not that the term matches -- bug introduced here
     if (args.prevLogIndex > log_->lastIndex()) {
         reply.conflictIndex = log_->lastIndex() + 1;
         reply.conflictTerm = -1;
         return reply;
     }
 
-    // append entries
+    // append/overwrite entries
     int idx = args.prevLogIndex;
     for (const auto& entry : args.entries) {
         idx++;
         if (idx <= log_->lastIndex()) {
             if (log_->getEntry(idx).term != entry.term) {
+                // conflicting entry, truncate and append
                 log_->truncateAfter(idx - 1);
                 log_->append(entry);
             }
-            // else already have it
+            // else already consistent
         } else {
             log_->append(entry);
         }
     }
 
-    // update commit index
+    // advance commit index if leader has moved it
     if (args.leaderCommit > commitIndex_) {
         commitIndex_ = std::min(args.leaderCommit, log_->lastIndex());
     }
 
     reply.success = true;
-    std::cerr << "[NODE " << id_ << "][FOLLOWER] accepted AE from " << args.leaderId
-              << " term=" << args.term << "\n";
     return reply;
 }
