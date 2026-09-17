@@ -79,6 +79,20 @@ int RaftNode::getLeader() const {
     return leaderId_;
 }
 
+std::string RaftNode::getValue(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return kvStore_->get(key);
+}
+
+int RaftNode::getCommitIndex() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return commitIndex_;
+}
+
+int RaftNode::getLastApplied() const {
+    return lastApplied_;
+}
+
 void RaftNode::persist() {
     // stub - WAL added later
 }

@@ -57,9 +57,12 @@ public:
 
     // Client interface
     bool submit(const std::string& command, int& index, int& term);
+    std::string getValue(const std::string& key) const;
     int getLeader() const;
     NodeState getState() const;
     int getId() const { return id_; }
+    int getCommitIndex() const;
+    int getLastApplied() const;
 
     // Cluster management
     void setPeers(std::vector<RaftNode*> peers);
