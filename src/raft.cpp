@@ -114,6 +114,8 @@ void RaftNode::ticker() {
             startElection();
             lastHB = std::chrono::steady_clock::now();
         }
+
+        applyEntries();
     }
 }
 
@@ -240,11 +242,40 @@ void RaftNode::sendHeartbeats() {
 }
 
 void RaftNode::applyEntries() {
-    // stub
+    // called periodically from ticker to apply committed entries
+    int toApply = -1;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        toApply = commitIndex_;
+    }
+
+    while (lastApplied_ < toApply) {
+        lastApplied_++;
+        std::lock_guard<std::mutex> lk(mu_);
+        if (lastApplied_ > log_->lastIndex()) {
+            lastApplied_--;
+            break;
+        }
+        auto entry = log_->getEntry(lastApplied_);
+        std::string result = kvStore_->apply(entry.command);
+        std::cerr << "[NODE " << id_ << "] applied index=" << lastApplied_
+                  << " cmd='" << entry.command << "' result='" << result << "'\n";
+    }
 }
 
-bool RaftNode::submit(const std::string& /*command*/, int& /*index*/, int& /*term*/) {
-    return false;
+bool RaftNode::submit(const std::string& command, int& index, int& term) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (state_ != NodeState::LEADER) return false;
+
+    index = log_->lastIndex() + 1;
+    term = currentTerm_;
+    LogEntry entry{currentTerm_, index, command};
+    log_->append(entry);
+    // matchIndex is per-peer; leader's own is implicit via log_->lastIndex()
+
+    std::cerr << "[NODE " << id_ << "][LEADER] submitted command '" << command
+              << "' at index=" << index << " term=" << term << "\n";
+    return true;
 }
 
 RequestVoteReply RaftNode::handleRequestVote(const RequestVoteArgs& args) {
