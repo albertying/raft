@@ -245,8 +245,17 @@ void RaftNode::sendHeartbeats() {
                 n--;
             }
         } else {
-            // back off
-            if (reply.conflictIndex > 0) {
+            // back off using conflict hint
+            if (reply.conflictTerm > 0) {
+                // find last entry with conflictTerm in our log
+                int idx = log_->lastIndex();
+                while (idx > 0 && log_->getEntry(idx).term != reply.conflictTerm) idx--;
+                if (idx > 0) {
+                    nextIndex_[i] = idx + 1;
+                } else {
+                    nextIndex_[i] = reply.conflictIndex > 0 ? reply.conflictIndex : 1;
+                }
+            } else if (reply.conflictIndex > 0) {
                 nextIndex_[i] = reply.conflictIndex;
             } else if (nextIndex_[i] > 1) {
                 nextIndex_[i]--;
@@ -345,10 +354,21 @@ AppendEntriesReply RaftNode::handleAppendEntries(const AppendEntriesArgs& args) 
     reply.term = currentTerm_;
 
     // check log consistency at prevLogIndex
-    // NOTE: only checking index exists, not that the term matches -- bug introduced here
     if (args.prevLogIndex > log_->lastIndex()) {
         reply.conflictIndex = log_->lastIndex() + 1;
         reply.conflictTerm = -1;
+        return reply;
+    }
+
+    // prevLogTerm must match — fixes replication consistency bug
+    if (args.prevLogIndex > 0 &&
+        log_->getEntry(args.prevLogIndex).term != args.prevLogTerm) {
+        int conflictTerm = log_->getEntry(args.prevLogIndex).term;
+        // find first index with this term so leader can skip the whole term
+        int ci = args.prevLogIndex;
+        while (ci > 1 && log_->getEntry(ci - 1).term == conflictTerm) ci--;
+        reply.conflictIndex = ci;
+        reply.conflictTerm = conflictTerm;
         return reply;
     }
 
