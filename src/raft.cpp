@@ -165,8 +165,9 @@ void RaftNode::startElection() {
 
     std::lock_guard<std::mutex> lg(mu_);
     if (state_ == NodeState::CANDIDATE && currentTerm_ == term) {
-        // majority of peers (doesn't include self)
-        if (votes > (int)peers_.size() / 2) {
+        // majority of cluster (peers + self)
+        int clusterSize = (int)peers_.size() + 1;
+        if (votes > clusterSize / 2) {
             state_ = NodeState::LEADER;
             leaderId_ = id_;
             std::cerr << "[NODE " << id_ << "][LEADER] elected term=" << term << "\n";
