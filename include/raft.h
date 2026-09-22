@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <fstream>
 
 enum class NodeState { FOLLOWER, CANDIDATE, LEADER };
 
@@ -66,6 +67,7 @@ public:
 
     // Cluster management
     void setPeers(std::vector<RaftNode*> peers);
+    void setWalDir(const std::string& dir);
     void start();
     void kill();
     void restart();
@@ -94,6 +96,8 @@ private:
 
     std::unique_ptr<RaftLog> log_;
     std::unique_ptr<KVStore> kvStore_;
+
+    std::string walDir_;
 
     // heartbeat interval (leader sends AE every 50ms)
     static constexpr int kHeartbeatMs = 50;

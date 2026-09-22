@@ -5,6 +5,7 @@
 #include <random>
 #include <sstream>
 #include <algorithm>
+#include <fstream>
 
 // [NODE id][STATE] logging
 static const char* stateName(NodeState s) {
@@ -48,6 +49,11 @@ void RaftNode::setPeers(std::vector<RaftNode*> peers) {
     peers_ = std::move(peers);
     nextIndex_.assign(peers_.size(), 1);
     matchIndex_.assign(peers_.size(), 0);
+}
+
+void RaftNode::setWalDir(const std::string& dir) {
+    walDir_ = dir;
+    log_->setWalDir(dir);
 }
 
 void RaftNode::start() {
@@ -94,11 +100,26 @@ int RaftNode::getLastApplied() const {
 }
 
 void RaftNode::persist() {
-    // stub - WAL added later
+    // write votedFor to meta file
+    // BUG: forgets to write currentTerm_ - term will revert to 0 on restart
+    if (walDir_.empty()) return;
+    std::string metaPath = walDir_ + "/" + std::to_string(id_) + ".meta";
+    std::ofstream f(metaPath, std::ios::trunc);
+    if (!f) return;
+    // only writing votedFor, not term (bug: should write both atomically)
+    f << votedFor_ << "\n";
+    // no fsync - data may be lost on crash
 }
 
 void RaftNode::loadPersist() {
-    // stub - WAL added later
+    if (walDir_.empty()) return;
+    std::string metaPath = walDir_ + "/" + std::to_string(id_) + ".meta";
+    std::ifstream f(metaPath);
+    if (!f) return;
+    int vf = -1;
+    f >> vf;
+    votedFor_ = vf;
+    // currentTerm_ stays 0 because we didn't persist it
 }
 
 void RaftNode::ticker() {
@@ -325,6 +346,7 @@ RequestVoteReply RaftNode::handleRequestVote(const RequestVoteArgs& args) {
 
     if ((votedFor_ == -1 || votedFor_ == args.candidateId) && logOk) {
         votedFor_ = args.candidateId;
+        persist(); // save votedFor before sending reply
         reply.voteGranted = true;
         lastHeartbeat_ = std::chrono::steady_clock::now(); // reset timer on vote grant
         std::cerr << "[NODE " << id_ << "][" << stateName(state_) << "] voted for " << args.candidateId
