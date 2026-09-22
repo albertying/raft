@@ -70,8 +70,31 @@ void RaftNode::kill() {
 
 void RaftNode::restart() {
     dead_ = false;
+    state_ = NodeState::FOLLOWER;
+    leaderId_ = -1;
+    commitIndex_ = 0;
+    lastApplied_ = 0;
     electionTimeoutMs_ = randomTimeout();
     lastHeartbeat_ = std::chrono::steady_clock::now();
+
+    // reset state machine and log, then reload from WAL
+    kvStore_ = std::make_unique<KVStore>();
+    log_ = std::make_unique<RaftLog>();
+    log_->setNodeId(id_);
+
+    loadPersist();
+    if (!walDir_.empty()) {
+        log_->setWalDir(walDir_);
+        log_->loadFromWAL();
+        // set commitIndex to replayed log length so entries get re-applied
+        commitIndex_ = log_->lastIndex();
+        std::cerr << "[NODE " << id_ << "] restarted, log recovered to index=" << log_->lastIndex() << "\n";
+    }
+
+    // re-init leader volatile state
+    nextIndex_.assign(peers_.size(), log_->lastIndex() + 1);
+    matchIndex_.assign(peers_.size(), 0);
+
     tickerThread_ = std::thread(&RaftNode::ticker, this);
 }
 
