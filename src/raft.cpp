@@ -126,15 +126,13 @@ int RaftNode::getLastApplied() const {
 }
 
 void RaftNode::persist() {
-    // write votedFor to meta file
-    // BUG: forgets to write currentTerm_ - term will revert to 0 on restart
+    // atomically persist term and votedFor before responding to any RPC
     if (walDir_.empty()) return;
     std::string metaPath = walDir_ + "/" + std::to_string(id_) + ".meta";
     std::ofstream f(metaPath, std::ios::trunc);
     if (!f) return;
-    // only writing votedFor, not term (bug: should write both atomically)
-    f << votedFor_ << "\n";
-    // no fsync - data may be lost on crash
+    f << currentTerm_ << " " << votedFor_ << "\n";
+    f.flush(); // ensure data hits the OS buffer
 }
 
 void RaftNode::loadPersist() {
@@ -142,10 +140,10 @@ void RaftNode::loadPersist() {
     std::string metaPath = walDir_ + "/" + std::to_string(id_) + ".meta";
     std::ifstream f(metaPath);
     if (!f) return;
-    int vf = -1;
-    f >> vf;
+    int term = 0, vf = -1;
+    f >> term >> vf;
+    currentTerm_ = term;
     votedFor_ = vf;
-    // currentTerm_ stays 0 because we didn't persist it
 }
 
 void RaftNode::ticker() {
@@ -185,6 +183,7 @@ void RaftNode::startElection() {
     currentTerm_++;
     state_ = NodeState::CANDIDATE;
     votedFor_ = id_;
+    persist(); // must persist term before sending RequestVotes
     // don't reset lastHeartbeat here — that caused timer to not fire after failed election
     electionTimeoutMs_ = randomTimeout();
     int term = currentTerm_;
