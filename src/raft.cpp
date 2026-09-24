@@ -86,9 +86,12 @@ void RaftNode::restart() {
     if (!walDir_.empty()) {
         log_->setWalDir(walDir_);
         log_->loadFromWAL();
-        // set commitIndex to replayed log length so entries get re-applied
-        commitIndex_ = log_->lastIndex();
-        std::cerr << "[NODE " << id_ << "] restarted, log recovered to index=" << log_->lastIndex() << "\n";
+        // advance commit so WAL entries get re-applied
+        if (log_->lastIndex() > commitIndex_) {
+            commitIndex_ = log_->lastIndex();
+        }
+        std::cerr << "[NODE " << id_ << "] restarted, log index=" << log_->lastIndex()
+                  << " commitIndex=" << commitIndex_ << "\n";
     }
 
     // re-init leader volatile state
