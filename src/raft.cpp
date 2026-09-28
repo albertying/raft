@@ -237,6 +237,7 @@ void RaftNode::sendHeartbeats() {
         peers = peers_;
     }
 
+    // TODO: parallelize
     for (size_t i = 0; i < peers.size(); i++) {
         if (dead_) return;
 

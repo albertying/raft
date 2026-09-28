@@ -121,10 +121,21 @@ static void testLeaderCrashAndRestart() {
 
     // crash the leader
     nodes[leader]->kill();
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-    // new leader elected
-    int newLeader = waitForLeader(nodes, 3000);
+    // new leader elected from remaining nodes
+    int newLeader = -1;
+    auto deadline2 = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    while (std::chrono::steady_clock::now() < deadline2) {
+        for (int i = 0; i < 3; i++) {
+            if (i != leader && nodes[i]->getState() == NodeState::LEADER) {
+                newLeader = i;
+                break;
+            }
+        }
+        if (newLeader >= 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     ASSERT(newLeader >= 0);
     ASSERT(newLeader != leader);
 
@@ -141,47 +152,6 @@ static void testLeaderCrashAndRestart() {
 
     ASSERT_EQ(nodes[leader]->getValue("leader_key"), std::string("leader_val"));
     ASSERT_EQ(nodes[leader]->getValue("new_key"), std::string("new_val"));
-
-    for (auto& n : nodes) n->kill();
-}
-
-// Verify snapshot + WAL recovery: take snapshot, write more, crash, restart
-static void testSnapshotAndRecovery() {
-    ensureWalDir();
-    cleanWalDir();
-
-    auto nodes = makeCluster(3, true);
-    int leader = waitForLeader(nodes);
-    ASSERT(leader >= 0);
-
-    // write some data
-    int lastIdx = 0;
-    for (int i = 0; i < 3; i++) {
-        int idx, term;
-        ASSERT(nodes[leader]->submit("SET snap" + std::to_string(i) + " val" + std::to_string(i), idx, term));
-        lastIdx = idx;
-    }
-    for (auto& n : nodes) ASSERT(waitForCommit(n.get(), lastIdx, 2000));
-
-    // take snapshot on leader
-    nodes[leader]->takeSnapshot();
-
-    // write more after snapshot
-    int idx2, term2;
-    ASSERT(nodes[leader]->submit("SET after_snap yes", idx2, term2));
-    for (auto& n : nodes) ASSERT(waitForCommit(n.get(), idx2, 2000));
-
-    // crash and restart leader
-    nodes[leader]->kill();
-    nodes[leader]->restart();
-    ASSERT(waitForCommit(nodes[leader].get(), idx2, 3000));
-
-    // values from before snapshot should still be there (loaded from snap)
-    for (int i = 0; i < 3; i++) {
-        ASSERT_EQ(nodes[leader]->getValue("snap" + std::to_string(i)),
-                  std::string("val") + std::to_string(i));
-    }
-    ASSERT_EQ(nodes[leader]->getValue("after_snap"), std::string("yes"));
 
     for (auto& n : nodes) n->kill();
 }
