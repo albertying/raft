@@ -193,6 +193,7 @@ void RaftNode::startElection() {
 
     std::cerr << "[NODE " << id_ << "][CANDIDATE] starting election term=" << term << "\n";
 
+    // sequential for now
     int votes = 1; // vote for self
     for (auto* peer : peers_) {
         if (dead_) return;
@@ -349,6 +350,7 @@ bool RaftNode::submit(const std::string& command, int& index, int& term) {
     return true;
 }
 
+// Figure 2, RequestVote receiver
 RequestVoteReply RaftNode::handleRequestVote(const RequestVoteArgs& args) {
     RequestVoteReply reply{};
     std::lock_guard<std::mutex> lk(mu_);
@@ -381,6 +383,7 @@ RequestVoteReply RaftNode::handleRequestVote(const RequestVoteArgs& args) {
     return reply;
 }
 
+// Figure 2, AppendEntries receiver
 AppendEntriesReply RaftNode::handleAppendEntries(const AppendEntriesArgs& args) {
     AppendEntriesReply reply{};
     std::lock_guard<std::mutex> lk(mu_);
